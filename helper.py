@@ -4,13 +4,15 @@ except ImportError:
     from xml.etree.ElementTree import XML
 import zipfile
 
+import numpy as np
+import heapq
 import os, random, shutil
 import dash_html_components as html
 import base64
 import nltk, string
 from sklearn.feature_extraction.text import TfidfVectorizer
 
-from config import UPLOAD_DIRECTORY, PARA, TEXT
+from config import UPLOAD_DIRECTORY, PARA, TEXT, S3_BUCKET, S3_KEY, S3_SECRET
 
 from urllib.parse import quote as urlquote
 
@@ -29,6 +31,13 @@ def generate_unique_path():
     os.makedirs(path)
     return path
 
+def upload_to_s3(path, file):
+    session = boto3.Session(
+    aws_access_key_id=S3_KEY,
+    aws_secret_access_key=S3_SECRET,
+    )
+    s3 = session.resource('s3')
+    s3.meta.client.upload_file(Filename=path, Bucket=S3_BUCKET, Key=file)
 
 def get_docx_text(path):
     """
@@ -109,3 +118,57 @@ vectorizer = TfidfVectorizer(tokenizer=normalize, stop_words=dutch_stop_words)
 def cosine_sim(text1, text2):
     tfidf = vectorizer.fit_transform([text1, text2])
     return ((tfidf * tfidf.T).A)[0,1]
+
+
+def generate_summary(text, max_sentences = 5):
+    
+    # Word frequency list
+    word_frequencies = {}  
+    for word in nltk.word_tokenize(text):  
+        if word not in dutch_stop_words:
+            if word not in word_frequencies.keys():
+                word_frequencies[word] = 1
+            else:
+                word_frequencies[word] += 1
+    
+    # Maximum frequency
+    maximum_frequency = max(word_frequencies.values())
+
+    for word in word_frequencies.keys():  
+        word_frequencies[word] = (word_frequencies[word]/maximum_frequency)
+    maximum_frequency
+    
+    # Create sentences list
+    sentence_list = nltk.sent_tokenize(text)
+    
+    # Create summary of text
+    
+    sentence_scores = {}
+    word_count = 0
+    for sent in sentence_list:
+        
+        #print(sent)
+        for word in nltk.word_tokenize(sent.lower()):
+            word_count += 1
+            if word in word_frequencies.keys():
+                if len(sent.split(' ')) < 30:
+                    if sent not in sentence_scores.keys():
+                        sentence_scores[sent] = word_frequencies[word]
+                    else:
+                        sentence_scores[sent] += word_frequencies[word]
+        summary_sentences = heapq.nlargest(max_sentences, sentence_scores, key=sentence_scores.get)
+        summary = ' '.join(summary_sentences)
+    sentence_count = np.count_nonzero(sentence_list)
+    return(word_frequencies, summary, sentence_scores, sentence_count, word_count)
+
+
+def generate_table(dataframe, max_rows=10):
+    return html.Table(
+        # Header
+        [html.Tr([html.Th(col) for col in dataframe.columns])] +
+
+        # Body
+        [html.Tr([
+            html.Td(dataframe.iloc[i][col]) for col in dataframe.columns
+        ]) for i in range(min(len(dataframe), max_rows))]
+    )
